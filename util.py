@@ -1,10 +1,11 @@
 import os
+import sys
 import glob
 import cv2
 from skimage.transform import resize
 import numpy as np
-from FlowFormer.core.utils import flow_viz
-from FlowFormer.core.utils import frame_utils
+from core import flow_viz
+from core import frame_utils
 import requests
 import torch
 import torch.nn.functional as F
@@ -12,11 +13,15 @@ import torch.nn.functional as F
 
 DEPTH_BASE = 'VideoDepth'
 FLOW_BASE = 'RAFT'
-SEGMENT_BASE = 'Mask2Formermain/demo'
+SEGMENT_BASE = 'Mask2Former/demo'
 
 DEPTH_OUTPUTS = 'depth'
 FLOW_OUTPUTS = 'flow'
 SEGMENT_OUTPUTS = 'segment'
+
+anaconda_path = "E:\\anaconda3\\Scripts\\activate.bat"
+conda_name = "3dp"
+
 
 def get_samples_video(video_folder, format):
     lines = sorted([os.path.splitext(os.path.basename(xx)) for xx in glob.glob(os.path.join(video_folder, '*' + format))])
@@ -158,7 +163,7 @@ def generatemask(size):
     mask = mask.astype(np.float32)
     return mask
 
-def run_background(image_dir, sem_dir, flow_dir, width, height, N=3):
+def run_background(image_dir, flow_dir, width, height, step=1, N=1):
 
     # depth align
     lines = os.listdir(image_dir)
@@ -171,44 +176,51 @@ def run_background(image_dir, sem_dir, flow_dir, width, height, N=3):
         # create background_color and background_mask
         background_color = np.zeros((height, width, 3))
         background_mask = np.zeros((height, width, 3))
-        accumulate_color_difference = np.zeros((height, width, 3))
-        for seq_name in range(0, len(lines), N):
-            if seq_name < 13:
-                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name + 6) + '.flo'))
+
+        mog_color = np.zeros((height, width, 3))
+        mog_mask = np.zeros((height, width, 3))
+        
+        bg_subtractor = cv2.createBackgroundSubtractorMOG2(detectShadows=True)
+
+        for seq_name in range(0, len(lines)-1, N):
+            if seq_name < step:
+                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name + step).zfill(5) + '.flo'))
                 flow_fmask = flow_viz.flow_to_mask(flow_f, 0.01) / 255
                 flow_mask = flow_fmask.astype(np.uint8)
 
-            elif seq_name > len(lines) - 13:
-                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name - 6) + '.flo'))
+            elif seq_name > len(lines) - step:
+                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name - step).zfill(5) + '.flo'))
                 flow_bmask = flow_viz.flow_to_mask(flow_b, 0.01) / 255
                 flow_mask = flow_bmask.astype(np.uint8)
             else:
 
-                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name + 6) + '.flo'))
+                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name + step).zfill(5) + '.flo'))
                 flow_fmask = flow_viz.flow_to_mask(flow_f, 0.01) / 255
 
-                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name - 6) + '.flo'))
+                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name - step).zfill(5) + '.flo'))
                 flow_bmask = flow_viz.flow_to_mask(flow_b, 0.01) / 255
                 flow_mask = (flow_fmask.astype(np.uint8) | flow_bmask.astype(np.uint8))
 
-            image = cv2.imread(os.path.join(image_dir, str(seq_name) + '.jpg'))
-            image = cv2.resize(image, dsize=(width, height)) / 255
 
-            fgMask = np.expand_dims(flow_mask, axis=2).repeat(3, axis=2)
+            image = cv2.imread(os.path.join(image_dir, str(seq_name).zfill(5) + '.jpg'))
+            image = cv2.resize(image, dsize=(width, height))
 
-            background_color = background_color + image * (1 - fgMask)
-            background_mask = (background_mask + (1 - fgMask))
+            mog_fgMask = np.expand_dims(bg_subtractor.apply(image), axis=2).repeat(3, axis=2) / 255
+            flow_fgMask = np.expand_dims(flow_mask, axis=2).repeat(3, axis=2)
 
-            avage_color = background_color / (background_mask + 1e-10)
-            difference = np.expand_dims(np.abs(image - avage_color).sum(-1), axis=-1).repeat(3, -1) * (1 - fgMask)
-            accumulate_color_difference = accumulate_color_difference + difference
+            background_color = background_color + image * (1 - flow_fgMask) / 255
+            background_mask = background_mask + (1 - flow_fgMask)
 
-            background_color = np.where(accumulate_color_difference > 4, image * (1 - fgMask), background_color)
-            background_mask = np.where(accumulate_color_difference > 4, (1 - fgMask), background_mask)
-            accumulate_color_difference = np.where(np.logical_and(accumulate_color_difference > 4, fgMask==0), 0, accumulate_color_difference)
+            mog_color = mog_color + image * (1 - mog_fgMask) / 255
+            mog_mask = mog_mask + (1 - mog_fgMask)
+
         
-        background_color = background_color / (background_mask + 1e-10) * 255
-        cv2.imwrite(os.path.join(image_dir, 'background.jpg'), background_color)
+        background_color = background_color / (background_mask + 1e-3)
+        mog_color = mog_color  / (mog_mask + 1e-3)
+        background_color = np.where(background_mask==0, mog_color, background_color)
+    
+        cv2.imwrite(os.path.join(image_dir, 'background.jpg'), background_color * 255)
+        
 
 def flow_warp(x, flow):
     h, w = flow.shape[:2]
@@ -482,34 +494,46 @@ def run_depflow(video_name, image_path, save_path, width, height, gpu):
 
     # video sub_path
     build_folder(save_path, video_name + "_depth")
-    # build_folder(save_path, video_name + "_flow")
-    # build_folder(save_path, video_name + "_movemask")
-    # build_folder(save_path, video_name + "_sem")
-    # build_folder(save_path, video_name + "_inpaint_mask")
-    # build_folder(save_path, video_name + "_correct")
-    # build_folder(save_path, video_name + "_opacity")
+    build_folder(save_path, video_name + "_flow")
+    build_folder(save_path, video_name + "_movemask")
+    build_folder(save_path, video_name + "_sem")
+    build_folder(save_path, video_name + "_inpaint_mask")
+    build_folder(save_path, video_name + "_correct")
+    build_folder(save_path, video_name + "_opacity")
 
     image_dir = os.path.join(image_path, video_name)
     depth_dir = os.path.join(save_path, video_name + '_depth')
-    # correct_dir = os.path.join(save_path, video_name + '_correct')
-    # flow_dir = os.path.join(save_path, video_name + '_flow')
-    # move_dir = os.path.join(save_path, video_name + '_movemask')
-    # sem_dir = os.path.join(save_path, video_name + '_sem')
-    # inpaint_mask_dir = os.path.join(save_path, video_name + '_inpaint_mask')
-    # opacity_dir = os.path.join(save_path, video_name + '_opacity')
+    correct_dir = os.path.join(save_path, video_name + '_correct')
+    flow_dir = os.path.join(save_path, video_name + '_flow')
+    move_dir = os.path.join(save_path, video_name + '_movemask')
+    sem_dir = os.path.join(save_path, video_name + '_sem')
+    inpaint_mask_dir = os.path.join(save_path, video_name + '_inpaint_mask')
+    opacity_dir = os.path.join(save_path, video_name + '_opacity')
 
-    # run depth and optical flow estimation
-    # os.system(f'cd {FLOW_BASE} && python evaluate.py --input_floder {image_dir}/  --output_floder {flow_dir}/ --width {width} --height {height} --gpu {gpu}')
-    # run segment
-    # os.system(f'cd {SEGMENT_BASE} && python demo.py --input {image_dir}/  --output {sem_dir} --opts MODEL.WEIGHTS /media/lyb/CE7258D87258C73D/linux/github2/3dp/Mask2Formermain/demo/model_final_94dc52.pkl')
+    '''
+    if sys.platform.startswith('win'):
+        # run depth and optical flow estimation
+        os.system(f'cd {FLOW_BASE} && call {anaconda_path} {conda_name} && python evaluate.py --input_floder {image_dir}/  --output_floder {flow_dir}/ --width {width} --height {height} --gpu {gpu}')
+        # run segment
+        os.system(f'cd {SEGMENT_BASE} && call {anaconda_path} {conda_name} && python demo.py --input {image_dir}/  --output {sem_dir} --opts MODEL.WEIGHTS /media/lyb/CE7258D87258C73D/linux/github2/3dp/Mask2Formermain/demo/model_final_94dc52.pkl')
+    elif sys.platform.startswith("linux"):
+        os.system(f'cd {FLOW_BASE} && python evaluate.py --input_floder {image_dir}/  --output_floder {flow_dir}/ --width {width} --height {height} --gpu {gpu}')
+        os.system(f'cd {SEGMENT_BASE} && python demo.py --input {image_dir}/  --output {sem_dir} --opts MODEL.WEIGHTS /media/lyb/CE7258D87258C73D/linux/github2/3dp/Mask2Formermain/demo/model_final_94dc52.pkl')
+    '''
+    
     # run background
-    # run_background(image_dir, sem_dir, flow_dir, width, height)
-    # run_move_mask(image_dir, flow_dir, move_dir, width, height)
+    run_background(image_dir, flow_dir, width, height)
+    run_move_mask(image_dir, flow_dir, move_dir, width, height)
     # run depth
-    os.system(
-        f'cd {DEPTH_BASE} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
+    if sys.platform.startswith('win'):
+        os.system(
+            f'cd {DEPTH_BASE} && call {anaconda_path} {conda_name} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
+    elif sys.platform.startswith("linux"):
+        os.system(
+            f'cd {DEPTH_BASE} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
     # run_background_depth(correct_dir, depth_dir, image_dir, move_dir, sem_dir, width, height)
     # run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask_dir,opacity_dir, width, height, 1, 20)
+
 
 def download_checkpoint(url, folder, filename):
     os.makedirs(folder, exist_ok=True)
