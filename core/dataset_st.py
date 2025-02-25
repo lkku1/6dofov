@@ -171,57 +171,38 @@ class TestDataset(torch.utils.data.Dataset):
         frames = []
         depths = []
         masks = []
-        flows_zeros = np.zeros((self.h, self.w, 2))
         flows_f, flows_b = [], []
         flows_zeros = np.zeros((self.h, self.w, 2))
-        flows_b.append(flows_zeros)
-        for idx in selected_index:
-            frame_list = self.frame_dict[video_name]
-            img_path = os.path.join(self.video_root, video_name, frame_list[idx])
 
-            img_bytes = self.file_client.get(img_path, 'img')
-            img = imfrombytes(img_bytes, float32=False)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img = cv2.resize(img, self.size, interpolation=cv2.INTER_LINEAR)
-            img = Image.fromarray(img)
+        frame_list = self.frame_dict[video_name]
+        img_path = os.path.join(self.video_root, video_name, frame_list[selected_index])
+        img_bytes = self.file_client.get(img_path, 'img')
+        img = imfrombytes(img_bytes, float32=False)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, self.size, interpolation=cv2.INTER_LINEAR)
+        img = Image.fromarray(img)
 
+        dep_path = os.path.join(self.condition_root, video_name + "_depth", frame_list[selected_index].replace("jpg", "png"))
+        img_bytes = self.file_client.get(dep_path, 'img')
+        dep = imfrombytes(img_bytes, flag="unchanged", float32=False)
+        dep = cv2.resize(dep, self.size, interpolation=cv2.INTER_LINEAR)
+        dep = Image.fromarray(dep.astype(np.float64))
+
+        mask_path = os.path.join("D:/linux/github2", 'mask.png')
+        mask = Image.open(mask_path).resize(self.size, Image.NEAREST).convert('L')
+
+        for idx in range(self.num_frames):
             frames.append(img)
-
-            dep_path = os.path.join(self.condition_root, video_name + "_depth", frame_list[idx].replace("jpg", "png"))
-            img_bytes = self.file_client.get(dep_path, 'img')
-            dep = imfrombytes(img_bytes, flag="unchanged", float32=False)
-            dep = cv2.resize(dep, self.size, interpolation=cv2.INTER_LINEAR)
-            dep = Image.fromarray(dep.astype(np.float64))
             depths.append(dep)
-
-            mask_path = os.path.join("D:/linux/github2", 'mask.png')
-            mask = Image.open(mask_path).resize(self.size, Image.NEAREST).convert('L')
-
             masks.append(mask)
 
-            if  idx < len(selected_index)-1 and self.load_flow:
-                current_n = frame_list[idx][:-4]
-                next_n = frame_list[idx + 1][:-4]
-                flow_f_path = os.path.join(self.condition_root, video_name + "_flow", f'{current_n}to{next_n}.flo')
-                flow_b_path = os.path.join(self.condition_root, video_name + "_flow", f'{next_n}to{current_n}.flo')
-                flow_f = readFlow(flow_f_path)
-                flow_b = readFlow(flow_b_path)
-                flow_f = resize_flow(flow_f, self.h, self.w)
-                flow_b = resize_flow(flow_b, self.h, self.w)
-                flows_f.append(flow_f)
-                flows_b.append(flow_b)
-
-            if  idx < len(selected_index)-1 and not self.load_flow:
-                flows_f.append(flows_zeros)
-                flows_b.append(flows_zeros)
-
-            if len(frames) == self.num_frames:  # random reverse
-                flows_f.append(flows_zeros)
+            flows_f.append(flows_zeros)
+            flows_b.append(flows_zeros)
 
 
         # normalizate, to tensors
         frame_tensors = self._to_tensors(frames).div(255) * 2 - 1
-        depth_tensors = self._to_tensors(depths).div(20 * 300)
+        depth_tensors = self._to_tensors(depths).div(20 * 300) * 2 - 1
         
         mask_tensors = self._to_tensors(masks)
 
