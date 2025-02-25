@@ -106,7 +106,7 @@ class TrainDataset(torch.utils.data.Dataset):
 
         # normalizate, to tensors
         frame_tensors = self._to_tensors(frames).div(255) * 2 - 1
-        depth_tensors = self._to_tensors(depths).div(20 * 300) * 2 - 1
+        depth_tensors = self._to_tensors(depths).div(30 * 300) * 2 - 1
     
         con_mask_tensors = self._to_tensors(con_masks).div(255)
         occ_mask_tensors = self.max_pool(con_mask_tensors) - con_mask_tensors
@@ -202,7 +202,7 @@ class TestDataset(torch.utils.data.Dataset):
 
         # normalizate, to tensors
         frame_tensors = self._to_tensors(frames).div(255) * 2 - 1
-        depth_tensors = self._to_tensors(depths).div(20 * 300) * 2 - 1
+        depth_tensors = self._to_tensors(depths).div(30 * 300) * 2 - 1
         
         mask_tensors = self._to_tensors(masks)
 
@@ -236,16 +236,5 @@ if __name__ == '__main__':
     #     pic = np.stack([np.expand_dims(x, 2) for x in deps], axis=2)
     # pic = torch.from_numpy(pic).permute(2, 3, 0, 1).contiguous()
 
-    a = cv2.imread("D:/linux/github2/mask.png")
-    b_channel, g_channel, r_channel = cv2.split(a)
-    # alpha = np.ones(b_channel.shape, dtype=b_channel.dtype) * 0
-    alpha = np.where(b_channel>0, 128, 0).astype(np.uint8)
 
-    img_BGRA = cv2.merge((b_channel, g_channel, r_channel, alpha))
-    cv2.imwrite("1.png", img_BGRA)
-    from FlowFormer.core.utils import flow_viz
-    from FlowFormer.core.utils.frame_utils import readFlow
-    flow_f = readFlow("D:/linux/github2/move_scene/scene_condition/scene8_flow/234to240.flo")
-    flow_img = flow_viz.flow_to_image(flow_f)
-    cv2.imwrite("2.png", flow_img)
     print(1)

@@ -128,7 +128,7 @@ class TrainDataset(torch.utils.data.Dataset):
 
         # normalizate, to tensors
         frame_tensors = self._to_tensors(frames).div(255) * 2 - 1
-        depth_tensors = self._to_tensors(depths).div(20 * 300) * 2 - 1
+        depth_tensors = self._to_tensors(depths).div(30 * 300) * 2 - 1
     
         con_mask_tensors = self._to_tensors(con_masks).div(255)
         occ_mask_tensors = self.max_pool(con_mask_tensors) - con_mask_tensors
@@ -243,7 +243,7 @@ class TestDataset(torch.utils.data.Dataset):
 
         # normalizate, to tensors
         frame_tensors = self._to_tensors(frames).div(255) * 2 - 1
-        depth_tensors = self._to_tensors(depths).div(20 * 300) * 2 - 1
+        depth_tensors = self._to_tensors(depths).div(30 * 300) * 2 - 1
         
         mask_tensors = self._to_tensors(masks)
 
