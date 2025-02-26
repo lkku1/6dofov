@@ -260,59 +260,67 @@ def neig_4x2(x, y, H, W):
     return [(max(x - 2, 0), y), (min(x + 2, H-1), y), (x, (y - 2) % W), (x, (y + 2) % W)]
 
 def compute_mask(depth, valid_mask):
-    max_depth = depth.max()
-    depth_ori = (depth / max_depth * 255).astype(np.uint8)
+    depth_normal = depth / (30 * 300)
+    valid_mask = np.logical_and(valid_mask, np.where(depth_normal < 0.5, 1, 0))
+    depth_ori = (depth_normal * 255).astype(np.uint8)
 
     H, W = depth.shape
-    depth_edge = cv2.Canny(depth_ori, 30, 50) / 255 * valid_mask
+    depth_edge = cv2.Canny(depth_ori, 30, 50) * valid_mask
 
-
-    ln, li, st, _ = cv2.connectedComponentsWithStats(depth_edge.astype(np.uint8), 8, cv2.CV_32S)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(depth_edge.astype(np.uint8), connectivity=8)
     depth_edge_reduce = np.zeros((H, W))
     edge_index = 1
-    for index in range(1, ln, 1):
-        if st[index][-1] > 10:
-            depth_edge_reduce = np.where(li == index, edge_index, depth_edge_reduce)
-            edge_index = edge_index + 1
 
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area > 10:
+            depth_edge_reduce[labels == label] = edge_index
+            edge_index += 1
+   
     if depth_edge_reduce.sum() == 0:
         return [], depth_edge_reduce
 
-    edge_index_t = 1
-    edge_indexs = []
-    for index in range(1, edge_index, 1):
-        category_map = np.zeros((H, W))
-        edge_index_map = np.where(depth_edge_reduce == index, 1, 0)
-        edge_index_dilate = cv2.dilate(edge_index_map.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), iterations=1)
-        neighbor_map = edge_index_dilate - edge_index_map
-        pos = np.where(neighbor_map==1)
-        for pos_index in range(len(pos[0])):
-            x = pos[0][pos_index]
-            y = pos[1][pos_index]
-            neighbor8 = neig_8(x, y, H, W)
+    
+    neighbors = [(-1, -1), (-1, 0), (-1, 1),
+                 (0, -1),          (0, 1),
+                 (1, -1),  (1, 0), (1, 1)]
+    
+    depth_edge = []
+    for e_index in range(1, edge_index):
+        edge_coords = np.column_stack(np.where(depth_edge_reduce == e_index))
+        nf_edge = np.zeros((H, W, 3))
+        for y, x in edge_coords:  
+            for dy, dx in neighbors:
+                
+                min_depth = 0
+                max_depth = 0
 
-            neig_depth = 0
-            neig_depth_num = 0
-            for neig8_p in neighbor8:
-                if edge_index_map[neig8_p] == 1:
-                    neig_depth = neig_depth + depth[neig8_p]
-                    neig_depth_num = neig_depth_num + 1
-            if depth[x, y] <= neig_depth / neig_depth_num:
-                category_map[x, y] = 2 * edge_index_t - 1
-            if depth[x, y] > neig_depth / neig_depth_num:
-                category_map[x, y] = 2 * edge_index_t
+                ny, nx = y + dy, (x + dx) % W
+                n_depth = depth[ny, nx]
 
-        flag = np.where(category_map == 2 * edge_index_t - 1, True, False)
-        near_mean = depth[flag].mean()
-        if near_mean > 15 * 300:
-            continue
-        flag = np.where(category_map == 2 * edge_index_t, True, False)
-        far_mean = depth[flag].mean()
-        dilate_num = np.ceil(np.arctan(1.5 * 300 * (far_mean - near_mean) / (near_mean * far_mean))/(2 * 3.1415926 / W))
-        edge_index_t = edge_index_t + 1
-        edge_indexs.append([category_map, dilate_num])
+                if depth_edge_reduce[ny, nx] == 0:
 
-    return edge_indexs, depth_edge_reduce
+                    for ddy, ddx in neighbors:
+                        nny, nnx = ny + ddy, (nx + ddx) % W
+                        nn_depth = depth[nny, nnx]
+
+                        if depth_edge_reduce[nny, nnx] == depth_edge_reduce[y, x]:
+
+                            if n_depth < nn_depth:
+                                min_depth += 1
+                            if n_depth > nn_depth:
+                                max_depth += 1
+                                        
+                if min_depth < max_depth:
+                    nf_edge[ny, nx, 1] = 255
+                elif  min_depth > max_depth:
+                    nf_edge[ny, nx, 2] = 255
+            
+            nf_edge[y, x, 0] = 255
+       
+        depth_edge.append(nf_edge)
+
+    return depth_edge, depth_edge_reduce
 
 
 def write_depth(path, depth, bits=2):
@@ -348,30 +356,45 @@ def write_depth(path, depth, bits=2):
 
     return
 
-def flood_fill(mask):
+def flood_fill(mask, depth):
+
+    depth = depth / 300
 
     nf_index_maps = []
     for index in range(len(mask)):
 
-        nf_map = mask[index][0]
-        dilate_num = int(mask[index][1])
-        dilate_num = 1
-        near = np.where(nf_map==nf_map.max() -1, 1, 0)
-        far = np.where(nf_map==nf_map.max(), 1, 0)
+        nf_map = mask[index]
+        near = nf_map[:, :, 2]
+        far = nf_map[:, :, 1]
+
+        near_min = (depth[near == 255]).min()
+        far_max = (depth[far == 255]).max()
+
+        H, W = depth.shape
+
+        dilate_num = int(np.ceil(np.arctan(2 * (far_max - near_min) / (far_max * near_min)) / (2 * np.pi / W)))
 
         near_copy = near.copy() + 0
 
-        for dilate_idx in range(max(dilate_num*2, 5)):
-            near = cv2.dilate(near.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1)
-            near = np.where(near - far > 0, 1, 0)
-
+        near_far = np.zeros((H, W, 3))
+        for dilate_idx in range(2 * dilate_num):
             far = cv2.dilate(far.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1)
-            far = np.where(far - near > 0, 1, 0)
+            far = np.where(far - near > 0, 255, 0)
 
-        near_range = cv2.dilate(near_copy.astype(np.uint8), np.ones((2 + dilate_num, 2 + dilate_num), np.uint8), iterations=1)
-        near = near * near_range
+            near = cv2.dilate(near.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1)
+            near = np.where(near - far > 0, 255, 0)
 
-        nf_index_map = near + far * 2
+        near_range = cv2.dilate(nf_map[:, :, 0].astype(np.uint8), np.ones((dilate_num, dilate_num), np.uint8), iterations=1)
+        near = near * (near_range / 255)
+
+        kernel_size = 2 * int(np.ceil(dilate_num / 4))
+        if kernel_size % 2 == 1:
+            kernel_size = kernel_size - 1
+        kernel_size = kernel_size + 3
+        near = cv2.dilate(near.astype(np.uint8), np.ones((kernel_size, kernel_size), np.uint8), iterations=1)
+        far = np.where(far - near > 0, 128, 0)
+
+        nf_index_map = near + far
 
         nf_index_maps.append(nf_index_map)
 
@@ -391,7 +414,7 @@ def flood_fill(mask):
     group_mask = np.stack(group_mask, -1)
     return group_mask
 
-def run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask,opacity_dir, width, height, step, overflow, N=8):
+def run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask,opacity_dir, width, height, step=1, N=8):
 
     valid_mask = np.zeros((height, width))
     valid_mask[height//N:-height//N, :] = 1
@@ -408,7 +431,7 @@ def run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask,opacity_dir,
         result = np.zeros((height, width, 1))
         np.save(os.path.join(inpaint_mask, 'background.npy'), result)
     else:
-        result = flood_fill(depth_edge)
+        result = flood_fill(depth_edge, depth)
         np.save(os.path.join(inpaint_mask, 'background.npy'), result)
         edge_map = np.where(edge_map > 0, 1, 0)
         opacity_mask = 1 - cv2.dilate(edge_map.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1)
@@ -416,28 +439,28 @@ def run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask,opacity_dir,
         cv2.imwrite(os.path.join(opacity_dir, 'background.png'), opacity_mask)
 
     video_length = len(os.listdir(image_dir))
-    for index in range(0, video_length, step):
+    for index in range(0, video_length - 1, step):
         # if os.path.exists(os.path.join(write_path, str(index) + '.png')):
         #     continue
 
-        move_mask = cv2.imread(os.path.join(move_dir, str(index) + '.png'), 0) / 255
-        sky_mask = cv2.imread(os.path.join(sem_dir, str(index) + '.png'), 0) / 255
-        sky_mask = 1 - sky_mask
+        move_mask = cv2.imread(os.path.join(move_dir, str(index).zfill(5) + '.png'), 0) / 255
+        # sky_mask = cv2.imread(os.path.join(sem_dir, str(index).zfill(5) + '.png'), 0) / 255
+        # sky_mask = 1 - sky_mask
 
-        depth = cv2.imread(os.path.join(depth_dir, str(index) + '.png'), -1)
+        depth = cv2.imread(os.path.join(depth_dir, str(index).zfill(5) + '.png'), -1)
 
-        depth_edge, edge_map = compute_mask(depth, valid_mask=sky_mask * move_mask)
+        depth_edge, edge_map = compute_mask(depth, valid_mask = move_mask)
         if len(depth_edge) == 0:
             result = np.zeros((height, width, 1))
-            np.save(os.path.join(inpaint_mask, str(index) + '.npy'), result)
+            np.save(os.path.join(inpaint_mask, str(index).zfill(5) + '.npy'), result)
         else:
-            result = flood_fill(depth_edge)
-            cv2.imwrite(os.path.join(inpaint_mask, str(index) + '.npy'), result)
+            result = flood_fill(depth_edge, depth)
+            np.save(os.path.join(inpaint_mask, str(index).zfill(5) + '.npy'), result)
 
             edge_map = np.where(edge_map > 0, 1, 0)
             opacity_mask = 1 - cv2.dilate(edge_map.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1)
             opacity_mask = cv2.GaussianBlur(opacity_mask * 255, (5, 5), 1.3)
-            cv2.imwrite(os.path.join(opacity_dir, str(index) + '.npy'), opacity_mask)
+            np.save(os.path.join(opacity_dir, str(index).zfill(5) + '.npy'), opacity_mask)
 
 
 
@@ -481,7 +504,7 @@ def run_depflow(video_name, image_path, save_path, width, height, gpu):
     # elif sys.platform.startswith("linux"):
     #     os.system(f'cd {DEPTH_BASE} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
     # run_correct_depth(correct_dir, depth_dir, image_dir, move_dir, width, height)
-    run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask_dir, opacity_dir, width, height, 1, 20)
+    run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask_dir, opacity_dir, width, height)
 
 
 def download_checkpoint(url, folder, filename):
