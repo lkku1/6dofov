@@ -102,7 +102,7 @@ def run_videotoimage(video_path, video_name, video_format, image_path, width, he
             cv2.imwrite(os.path.join(image_path, video_name, str(index).zfill(5) + ".jpg"), frame)
 
 
-def run_move_mask(image_dir, flow_dir, move_mask_dir, width, height, N=3):
+def run_move_mask(image_dir, flow_dir, move_mask_dir, width, height,  step=1, N=1):
 
     # depth align
     lines = os.listdir(image_dir)
@@ -110,47 +110,46 @@ def run_move_mask(image_dir, flow_dir, move_mask_dir, width, height, N=3):
         lines.remove('background.jpg')
 
     # background sub
-    backSub = cv2.createBackgroundSubtractorMOG2()
+    backSub = cv2.createBackgroundSubtractorMOG2(history=len(lines), varThreshold=15, detectShadows=True)
     background_color = cv2.imread(os.path.join(image_dir, 'background.jpg'))
     _ = backSub.apply(background_color)
-    for seq_name in range(0, len(lines) + 1, 3):
+    for seq_name in range(0, len(lines), N):
         # if not os.path.exists(os.path.join(move_mask_dir, str(seq_name) + ".png")):
         if True:
             # seq_name = seq_name % len(lines)
-            if seq_name < 6:
-                foreward_flow = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name + 6) + '.flo'))
-                flow_mask = flow_viz.flow_to_mask(foreward_flow)
-                flow_mask = np.where(flow_mask > 0, 1, 0)
-            elif seq_name > len(lines) - 7:
-                backward_flow = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name - 6) + '.flo'))
-                flow_mask = flow_viz.flow_to_mask(backward_flow)
-                flow_mask = np.where(flow_mask > 0, 1, 0)
+            if seq_name < step:
+                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name + step).zfill(5) + '.flo'))
+                flow_fmask = flow_viz.flow_to_mask(flow_f, 0.1) / 255
+                flow_mask = flow_fmask.astype(np.uint8)
+            elif seq_name == len(lines) - step:
+                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name - step).zfill(5) + '.flo'))
+                flow_bmask = flow_viz.flow_to_mask(flow_b, 0.1) / 255
+                flow_mask = flow_bmask.astype(np.uint8)
             else:
-                foreward_flow = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name + 6) + '.flo'))
-                backward_flow = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name) + 'to' + str(seq_name - 6) + '.flo'))
 
-                foreflow_mask = flow_viz.flow_to_mask(foreward_flow)
-                backflow_mask = flow_viz.flow_to_mask(backward_flow)
-                flow_mask = np.where(foreflow_mask + backflow_mask > 0, 1, 0)
-            # cv2.imwrite("D:/linux/github2/move_scene/scene_condition/scene2_movemask/1.png", flow_mask*255)
-            image = cv2.imread(os.path.join(image_dir, str(seq_name) + '.jpg'))
+                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name + step).zfill(5) + '.flo'))
+                flow_fmask = flow_viz.flow_to_mask(flow_f, 0.1) / 255
+
+                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name - step).zfill(5) + '.flo'))
+                flow_bmask = flow_viz.flow_to_mask(flow_b, 0.1) / 255
+                flow_mask = (flow_fmask.astype(np.uint8) | flow_bmask.astype(np.uint8))
+           
+            image = cv2.imread(os.path.join(image_dir, str(seq_name).zfill(5) + '.jpg'))
             image = cv2.resize(image, dsize=(width, height))
 
             fgMask = backSub.apply(image)
-            fgMask = np.where(fgMask > 60, 1, 0)
-            # cv2.imwrite("D:/linux/github2/move_scene/scene_condition/scene2_movemask/2.png", fgMask*255)
+            fgMask = cv2.morphologyEx(np.where(fgMask > 60, 1, 0).astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8))
+
             fgMask = np.where(fgMask + flow_mask > 0, 255, 0)
             ln, li, st, _ = cv2.connectedComponentsWithStats(fgMask.astype(np.uint8), 8, cv2.CV_32S)
             record_mask = np.zeros(flow_mask.shape)
             for index in range(ln):
-                if st[index][4] > 4 and index != 0:
+                if st[index][4] > 10 and index != 0:
                     lii = np.where(li == index, index, 0)
                     record_mask = lii + record_mask
-            unique = np.unique(record_mask * flow_mask)[1:]
-            final_mask = np.zeros(flow_mask.shape)
-            for index in unique:
-                final_mask = final_mask + np.where(record_mask == index, 1, 0)
-            cv2.imwrite(os.path.join(move_mask_dir, str(seq_name) + ".png"), final_mask * 255)
+            
+            final_mask = np.where(record_mask > 0, 255, 0)
+            cv2.imwrite(os.path.join(move_mask_dir, str(seq_name).zfill(5) + ".png"), final_mask)
 
 def generatemask(size):
     # Generates a Guassian mask
@@ -176,49 +175,24 @@ def run_background(image_dir, flow_dir, width, height, step=1, N=1):
         # create background_color and background_mask
         background_color = np.zeros((height, width, 3))
         background_mask = np.zeros((height, width, 3))
-
-        mog_color = np.zeros((height, width, 3))
-        mog_mask = np.zeros((height, width, 3))
         
-        bg_subtractor = cv2.createBackgroundSubtractorMOG2(detectShadows=True)
+        bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=len(lines), varThreshold=15, detectShadows=True)
 
-        for seq_name in range(0, len(lines)-1, N):
-            if seq_name < step:
-                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name + step).zfill(5) + '.flo'))
-                flow_fmask = flow_viz.flow_to_mask(flow_f, 0.01) / 255
-                flow_mask = flow_fmask.astype(np.uint8)
-
-            elif seq_name > len(lines) - step:
-                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name - step).zfill(5) + '.flo'))
-                flow_bmask = flow_viz.flow_to_mask(flow_b, 0.01) / 255
-                flow_mask = flow_bmask.astype(np.uint8)
-            else:
-
-                flow_f = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name + step).zfill(5) + '.flo'))
-                flow_fmask = flow_viz.flow_to_mask(flow_f, 0.01) / 255
-
-                flow_b = frame_utils.readFlow(os.path.join(flow_dir, str(seq_name).zfill(5) + 'to' + str(seq_name - step).zfill(5) + '.flo'))
-                flow_bmask = flow_viz.flow_to_mask(flow_b, 0.01) / 255
-                flow_mask = (flow_fmask.astype(np.uint8) | flow_bmask.astype(np.uint8))
-
+        for seq_name in range(0, len(lines), N):
 
             image = cv2.imread(os.path.join(image_dir, str(seq_name).zfill(5) + '.jpg'))
             image = cv2.resize(image, dsize=(width, height))
 
-            mog_fgMask = np.expand_dims(bg_subtractor.apply(image), axis=2).repeat(3, axis=2) / 255
-            flow_fgMask = np.expand_dims(flow_mask, axis=2).repeat(3, axis=2)
-
-            background_color = background_color + image * (1 - flow_fgMask) / 255
-            background_mask = background_mask + (1 - flow_fgMask)
-
-            mog_color = mog_color + image * (1 - mog_fgMask) / 255
-            mog_mask = mog_mask + (1 - mog_fgMask)
+            
+            mog_fgMask = bg_subtractor.apply(image)
+            mog_fgMask =  cv2.morphologyEx(np.where(mog_fgMask > 60, 1, 0).astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8))
+            mog_fgMask = np.expand_dims(mog_fgMask, axis=2).repeat(3, axis=2)
+            if seq_name > 0:
+                background_color = background_color + image * (1 - mog_fgMask) / 255
+                background_mask = background_mask + (1 - mog_fgMask)
 
         
         background_color = background_color / (background_mask + 1e-3)
-        mog_color = mog_color  / (mog_mask + 1e-3)
-        background_color = np.where(background_mask==0, mog_color, background_color)
-    
         cv2.imwrite(os.path.join(image_dir, 'background.jpg'), background_color * 255)
         
 
@@ -229,65 +203,42 @@ def flow_warp(x, flow):
     res = cv2.remap(x, flow, None, cv2.INTER_LINEAR)
     return res
 
-def run_background_depth(correct_dir, depth_dir, image_dir, move_dir, sem_dir, width, height, N=3):
+def run_correct_depth(correct_dir, depth_dir, image_dir, move_dir, width, height, N=1):
 
-    # depth align
-
+    # depth align   
     line_depth = os.listdir(depth_dir)
     line_correct = os.listdir(correct_dir)
-    # reff_depth = cv2.imread("D:/linux/github2/3dp/VideoDepth/1.png", -1)
-    # depth = cv2.imread("D:/linux/github2/3dp/1.png", -1)
-    # b = np.abs(depth - reff_depth)/np.abs(depth - reff_depth).max() * 255
-    # cv2.imwrite("2.png", b)
+    
     if len(line_depth) != len(line_correct):
-        mask_org = generatemask((2000, 2000))
 
         # create background_color and background_mask
         reff_depth = cv2.imread(os.path.join(depth_dir, 'background.png'), -1)
-
-        sky_mask = cv2.imread(os.path.join(sem_dir, 'background.png'), 0)
-        sky_mask = cv2.resize(sky_mask, dsize=(width, height))
-        sky_mask = np.where(sky_mask == 255, 1.0, 0.0)
-        dilate_length = int(height / 12)
-        for seq_name in range(0, len(line_depth), N):
+        
+       
+        blur_length = int(height / 12)
+        if blur_length % 2 == 0:
+            blur_length = blur_length + 1
+        for seq_name in range(0, len(line_depth) - 1, N):
             # if os.path.exists(os.path.join(correct_dir, str(seq_name) + '.png')):
             #     continue
 
             reff_depth_copy = reff_depth.copy()
-            move_mask = cv2.imread(os.path.join(move_dir, str(seq_name) + '.png'), 0)
+            depth = cv2.imread(os.path.join(depth_dir, str(seq_name).zfill(5) + '.png'), -1)
+            move_mask = cv2.imread(os.path.join(move_dir, str(seq_name).zfill(5) + '.png'), 0)
             move_mask = cv2.resize(move_mask, dsize=(width, height))
-            move_mask = np.where(move_mask > 0, 1.0, 0.0) * (1 - sky_mask)
-            depth = cv2.imread(os.path.join(depth_dir, str(seq_name) + '.png'), -1)
+            move_mask = np.where(move_mask > 0, 1.0, 0.0)
+            
+            move_mask = cv2.dilate(move_mask.astype(np.uint8), np.ones((5, 5), dtype=np.uint8), iterations=1)
+            region = 1 - move_mask
 
+            p_coef = np.polyfit(depth[region.astype(bool)], reff_depth[region.astype(bool)], deg=1)
+            depth_pol = np.polyval(p_coef, depth.reshape(-1)).reshape(depth.shape)
 
-            ln, li, st, _ = cv2.connectedComponentsWithStats(move_mask.astype(np.uint8), 8, cv2.CV_32S)
+            index_dilate = cv2.GaussianBlur(move_mask, (blur_length, blur_length), 0)
+            reff_depth_copy = index_dilate * depth_pol + (1 - index_dilate) * reff_depth_copy
 
-            for index in range(ln):
-                if index != 0:
-                    index_mask = np.where(li==index, 1, 0)
-                    index_dilate = cv2.dilate(index_mask.astype(np.uint8),
-                                             np.ones((dilate_length, dilate_length), np.uint8),
-                                             iterations=1)
-
-                    dilate_region = index_dilate - index_mask
-                    region_pos = np.where(dilate_region > 0)
-                    box_min_w = region_pos[1].min()
-                    box_max_w = region_pos[1].max()
-                    box_min_h = region_pos[0].min()
-                    box_max_h = region_pos[0].max()
-
-                    p_coef = np.polyfit(depth[dilate_region.astype(bool)], reff_depth[dilate_region.astype(bool)], deg=1)
-                    depth_correct = np.polyval(p_coef, depth.reshape(-1)).reshape(depth.shape)
-                    depth_correct = np.clip(depth_correct, 0, 2 ** 16 - 1)
-
-                    gauss_mask = cv2.resize(mask_org, dsize=(box_max_w - box_min_w, box_max_h - box_min_h))
-                    box_index_mask = index_mask[box_min_h:box_max_h, box_min_w:box_max_w]
-                    gauss_mask = np.where(box_index_mask==1, 1, gauss_mask)
-
-                    reff_depth_copy[box_min_h:box_max_h, box_min_w:box_max_w] = reff_depth_copy[box_min_h:box_max_h, box_min_w:box_max_w] * (
-                                1 - gauss_mask) + depth_correct[box_min_h:box_max_h, box_min_w:box_max_w] * gauss_mask
-
-            cv2.imwrite(os.path.join(correct_dir, str(seq_name).zfill(5) + '.png'), reff_depth_copy)
+            cv2.imwrite(os.path.join(correct_dir, str(seq_name).zfill(5) + '.png'), reff_depth_copy.astype("uint16"))
+            # cv2.imwrite(os.path.join(correct_dir, str(seq_name) + '.png'), reff_depth_copy/reff_depth_copy.max()*255)
 
         cv2.imwrite(os.path.join(correct_dir, 'background.png'), reff_depth)
 
@@ -446,9 +397,9 @@ def run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask,opacity_dir,
     valid_mask[height//N:-height//N, :] = 1
 
     depth = cv2.imread(os.path.join(depth_dir, 'background.png'), -1)
-    sky_mask = cv2.imread(os.path.join(sem_dir, 'background.png'), 0) / 255
-    sky_mask = np.where(sky_mask > 0, 1.0, 0.0)
-    valid_mask = valid_mask * (1 - sky_mask)
+    # sky_mask = cv2.imread(os.path.join(sem_dir, 'background.png'), 0) / 255
+    # sky_mask = np.where(sky_mask > 0, 1.0, 0.0)
+    # valid_mask = valid_mask * (1 - sky_mask)
 
     depth_edge, edge_map = compute_mask(depth, valid_mask)
 
@@ -522,17 +473,15 @@ def run_depflow(video_name, image_path, save_path, width, height, gpu):
     '''
     
     # run background
-    run_background(image_dir, flow_dir, width, height)
-    run_move_mask(image_dir, flow_dir, move_dir, width, height)
+    # run_background(image_dir, flow_dir, width, height)
+    # run_move_mask(image_dir, flow_dir, move_dir, width, height)
     # run depth
-    if sys.platform.startswith('win'):
-        os.system(
-            f'cd {DEPTH_BASE} && call {anaconda_path} {conda_name} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
-    elif sys.platform.startswith("linux"):
-        os.system(
-            f'cd {DEPTH_BASE} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
-    # run_background_depth(correct_dir, depth_dir, image_dir, move_dir, sem_dir, width, height)
-    # run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask_dir,opacity_dir, width, height, 1, 20)
+    # if sys.platform.startswith('win'):
+    #     os.system(f'cd {DEPTH_BASE} && call {anaconda_path} {conda_name} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
+    # elif sys.platform.startswith("linux"):
+    #     os.system(f'cd {DEPTH_BASE} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
+    # run_correct_depth(correct_dir, depth_dir, image_dir, move_dir, width, height)
+    run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask_dir, opacity_dir, width, height, 1, 20)
 
 
 def download_checkpoint(url, folder, filename):
