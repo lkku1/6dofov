@@ -484,7 +484,7 @@ def run_depflow(video_name, image_path, save_path, width, height, gpu):
     inpaint_mask_dir = os.path.join(save_path, video_name + '_inpaint_mask')
     opacity_dir = os.path.join(save_path, video_name + '_opacity')
 
-    '''
+    
     if sys.platform.startswith('win'):
         # run depth and optical flow estimation
         os.system(f'cd {FLOW_BASE} && call {anaconda_path} {conda_name} && python evaluate.py --input_floder {image_dir}/  --output_floder {flow_dir}/ --width {width} --height {height} --gpu {gpu}')
@@ -493,17 +493,17 @@ def run_depflow(video_name, image_path, save_path, width, height, gpu):
     elif sys.platform.startswith("linux"):
         os.system(f'cd {FLOW_BASE} && python evaluate.py --input_floder {image_dir}/  --output_floder {flow_dir}/ --width {width} --height {height} --gpu {gpu}')
         os.system(f'cd {SEGMENT_BASE} && python demo.py --input {image_dir}/  --output {sem_dir} --opts MODEL.WEIGHTS /media/lyb/CE7258D87258C73D/linux/github2/3dp/Mask2Formermain/demo/model_final_94dc52.pkl')
-    '''
+    
     
     # run background
-    # run_background(image_dir, flow_dir, width, height)
-    # run_move_mask(image_dir, flow_dir, move_dir, width, height)
+    run_background(image_dir, flow_dir, width, height)
+    run_move_mask(image_dir, flow_dir, move_dir, width, height)
     # run depth
-    # if sys.platform.startswith('win'):
-    #     os.system(f'cd {DEPTH_BASE} && call {anaconda_path} {conda_name} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
-    # elif sys.platform.startswith("linux"):
-    #     os.system(f'cd {DEPTH_BASE} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
-    # run_correct_depth(correct_dir, depth_dir, image_dir, move_dir, width, height)
+    if sys.platform.startswith('win'):
+        os.system(f'cd {DEPTH_BASE} && call {anaconda_path} {conda_name} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
+    elif sys.platform.startswith("linux"):
+        os.system(f'cd {DEPTH_BASE} &&  python run_depth_anything.py --data_dir {image_dir}  --output_dir {depth_dir} --width {width} --height {height} --gpu {gpu}')
+    run_correct_depth(correct_dir, depth_dir, image_dir, move_dir, width, height)
     run_masks(image_dir, depth_dir, move_dir, sem_dir, inpaint_mask_dir, opacity_dir, width, height)
 
 
